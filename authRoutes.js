@@ -28,9 +28,7 @@ router.post("/register", (req, res) => {
       if (err) {
         console.log("REGISTER ERROR:", err);
 
-        return res.status(400).json({
-          error: err.message
-        });
+        if (err.message.includes("UNIQUE")) { return res.status(400).json({ error: "Username already exists. Please sign in instead." }); } return res.status(400).json({ error: "Registration failed. Please try again." });
       }
 
       console.log("User Registered:", username);

@@ -138,33 +138,3 @@ http://localhost:3000
 * Threat Detection Alerts
 * Advanced PII Classification
 
-Here's the full startup checklist for your project — you need multiple terminal windows open at once since you have two backends + a frontend.
-
-**Window 1 — Python/FastAPI backend** (file upload encrypt/decrypt, port 8000)
-```powershell
-cd C:\Users\lapto\OneDrive\Desktop\pii_guard\backend
-python app.py
-```
-Confirm you see: `Uvicorn running on http://0.0.0.0:8000`
-
-**Window 2 — Node/Express backend** (text-paste encrypt/decrypt, port 5000 — used by `EncryptBox.jsx`/`DecryptBox.jsx`)
-```powershell
-cd C:\Users\lapto\OneDrive\Desktop\pii_guard\backend
-node server.js
-```
-Confirm you see something like: `Server running on port 5000`
-
-**Window 3 — React frontend** (port 3000)
-```powershell
-cd C:\Users\lapto\OneDrive\Desktop\pii_guard\frontend
-npm start
-```
-This should auto-open `http://localhost:3000` in your browser.
-
-A few notes:
-- Keep all three windows open and running simultaneously while you test — closing any one of them breaks that part of the app.
-- If `npm start` fails with missing packages, run `npm install` first in that folder.
-- If `node server.js` fails, you may also need `npm install` in the backend folder (check `package.json` for what it needs — looks like it uses `db.js` too, so confirm your database, if any, is reachable).
-- Your browser address bar should always be `localhost:3000` while you're using the app — never navigate directly to `127.0.0.1:8000` or `:5000` URLs yourself, those are just APIs, not pages to browse.
-
-If any of these three fail to start, paste me the exact error from that window and I'll help fix it.

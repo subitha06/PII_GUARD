@@ -44,7 +44,7 @@ function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-logo">⛧</div>
-        <h1 className="login-title">SHIELDNET</h1>
+        <h1 className="login-title">PII_GUARD</h1>
         <p className="login-sub">SENSITIVE FILE PROTECTION SYSTEM</p>
 
         <div className="login-tabs">
