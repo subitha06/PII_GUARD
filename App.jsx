@@ -1,3 +1,5 @@
+
+
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useState, useRef } from "react";
 import "./App.css";
@@ -13,6 +15,20 @@ const fmtBytes = (b) => {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const getPasswordStrength = (pwd) => {
+  if (!pwd) return { label: "", score: 0, color: "" };
+  let score = 0;
+  if (pwd.length >= 8) score++;
+  if (pwd.length >= 12) score++;
+  if (/[A-Z]/.test(pwd)) score++;
+  if (/[a-z]/.test(pwd)) score++;
+  if (/[0-9]/.test(pwd)) score++;
+  if (/[^A-Za-z0-9]/.test(pwd)) score++;
+  if (score <= 2) return { label: "Weak", score, color: "#e63946" };
+  if (score <= 4) return { label: "Medium", score, color: "#f4a900" };
+  return { label: "Strong", score, color: "#2dd36f" };
+};
 
 function isLoggedIn() {
   const token = localStorage.getItem("token");
@@ -58,7 +74,7 @@ function Dashboard() {
       <header className="header">
         <div className="logo">⛧</div>
         <div>
-          <div className="brand-name">SHIELDNET</div>
+          <div className="brand-name">PII_GUARD</div>
           <div className="brand-sub">SENSITIVE FILE PROTECTION SYSTEM</div>
         </div>
         <div className="online-badge">
@@ -90,7 +106,7 @@ function Dashboard() {
       </main>
 
       <footer className="footer">
-        SHIELDNET · Encrypt → Send → Decrypt · Key expires in 30 min
+        PII_GUARD · Encrypt → Send → Decrypt · Protected with Password-Based AES Encryption
       </footer>
     </div>
   );
@@ -98,6 +114,8 @@ function Dashboard() {
 
 function EncryptPanel() {
   const [file, setFile] = useState(null);
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [step, setStep] = useState(1);
   const [analysis, setAnalysis] = useState(null);
   const [progress, setProgress] = useState(0);
@@ -114,6 +132,7 @@ function EncryptPanel() {
   const reset = () => {
     setFile(null); setStep(1); setAnalysis(null);
     setProgress(0); setLogs([]); setResult(null);
+    setPassword(""); setShowPassword(false);
   };
 
   const handleDrop = (e) => {
@@ -138,6 +157,11 @@ function EncryptPanel() {
   };
 
   const handleEncrypt = async () => {
+    if (password.length < 8) {
+      alert("Password must be at least 8 characters!");
+      return;
+    }
+
     setStep(3);
     setLogs([]);
     setProgress(0);
@@ -145,8 +169,8 @@ function EncryptPanel() {
     const steps = [
       [15, "Reading file..."],
       [35, "Scanning PII patterns..."],
-      [60, "Encrypting fields with Fernet AES..."],
-      [80, "Generating 30-min key..."],
+      [55, "Deriving AES key from password (PBKDF2)..."],
+      [75, "Encrypting fields with AES..."],
       [95, "Writing output..."],
     ];
 
@@ -158,6 +182,7 @@ function EncryptPanel() {
 
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("password", password);
 
     try {
       const res = await fetch(`${API}/encrypt`, { method: "POST", body: fd });
@@ -177,10 +202,7 @@ function EncryptPanel() {
     window.open(`${API}/download/${result.encryptedFile}`, "_blank");
   };
 
-  const copyKey = () => {
-    navigator.clipboard.writeText(result.key);
-    alert("Key copied! Send it via SMS or a different app — NOT the same channel as the file.");
-  };
+  const strength = getPasswordStrength(password);
 
   return (
     <div>
@@ -221,7 +243,7 @@ function EncryptPanel() {
 
       {step === 2 && analysis && (
         <div className="card card-red">
-          <div className="card-label red">02 // File Ready</div>
+          <div className="card-label red">02 // Set Password & Encrypt</div>
           <div className="info-box">
             <div className="info-row">
               <span className="info-label">FILE</span>
@@ -236,12 +258,67 @@ function EncryptPanel() {
               <span className="info-val">{fmtBytes(file.size)}</span>
             </div>
           </div>
+
+          <div className="key-input-wrap">
+            <div className="key-input-label">🔑 SET ENCRYPTION PASSWORD</div>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                className="key-input"
+                placeholder="Enter a strong password (min 8 characters)"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid var(--red)", background: "var(--bg2)", color: "var(--fg)" }}
+              />
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                {showPassword ? "🙈 Hide" : "👁 Show"}
+              </button>
+            </div>
+
+            {password && (
+              <div style={{ marginTop: "10px" }}>
+                <div style={{ display: "flex", gap: "4px", marginBottom: "6px" }}>
+                  {[1, 2, 3, 4, 5, 6].map((bar) => (
+                    <div
+                      key={bar}
+                      style={{
+                        height: "6px",
+                        flex: 1,
+                        borderRadius: "3px",
+                        background: bar <= strength.score ? strength.color : "#3a3a3a",
+                        transition: "background 0.2s",
+                      }}
+                    />
+                  ))}
+                </div>
+                <div style={{ fontSize: "13px", fontWeight: "bold", color: strength.color }}>
+                  {strength.label} Password
+                </div>
+              </div>
+            )}
+
+            <div style={{ fontSize: "12px", color: "var(--dim)", marginTop: "6px" }}>
+              ⚠ Share this password with receiver via SMS or a <strong>different channel</strong> — NOT the same channel as the file.
+            </div>
+          </div>
+
           <div className="notice">
             🔐 All PII fields (Aadhaar, PAN, Email, Phone, Credit Card) will be encrypted.<br />
-            A secret key will be generated — valid for <strong>30 minutes.</strong>
+            Password is converted to AES key using <strong>PBKDF2</strong> — raw key is never stored or shown.
           </div>
+
           <div className="btn-row">
-            <button className="btn btn-red" onClick={handleEncrypt}>⚙ Encrypt Now</button>
+            <button
+              className="btn btn-red"
+              disabled={password.length < 8}
+              onClick={handleEncrypt}
+            >
+              ⚙ Encrypt Now
+            </button>
             <button className="btn btn-ghost" onClick={reset}>← Back</button>
           </div>
         </div>
@@ -272,16 +349,13 @@ function EncryptPanel() {
             <div className="result-info">
               <div className="result-title">FILE ENCRYPTED</div>
               <div className="result-sub">
-                {result.fieldsEncrypted} PII field(s) locked. Key expires in <strong>30 minutes.</strong>
+                {result.fieldsEncrypted} PII field(s) locked using password-based AES encryption.
               </div>
 
-              <div className="key-label">🔑 SECRET KEY — Copy &amp; send via SMS or different app</div>
-              <div className="key-box">{result.key}</div>
-              <button className="copy-btn" onClick={copyKey}>📋 Copy Key</button>
-
               <div className="warning-box">
-                ⚠ Send the <strong>FILE</strong> via WhatsApp/Email.<br />
-                Send the <strong>KEY</strong> via SMS or a completely different app.<br />
+                🔑 <strong>Remind receiver of the password</strong> you set — via SMS or a completely different app.<br />
+                Send the <strong>FILE</strong> via WhatsApp/Email.<br />
+                Send the <strong>PASSWORD</strong> via SMS or a different channel.<br />
                 <strong>NEVER send both through the same channel.</strong>
               </div>
 
@@ -289,7 +363,7 @@ function EncryptPanel() {
                 <button className="btn btn-red" onClick={handleDownload}>⬇ Download Encrypted File</button>
                 <button className="btn btn-ghost" onClick={reset}>Encrypt Another</button>
               </div>
-              <div className="auto-del">⏱ File deleted from server in 5 minutes. Key expires in 30 min.</div>
+              <div className="auto-del">⏱ File deleted from server in 5 minutes.</div>
             </div>
           </div>
         </div>
@@ -300,7 +374,8 @@ function EncryptPanel() {
 
 function DecryptPanel() {
   const [file, setFile] = useState(null);
-  const [key, setKey] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [step, setStep] = useState(1);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState([]);
@@ -314,8 +389,9 @@ function DecryptPanel() {
   };
 
   const reset = () => {
-    setFile(null); setKey(""); setStep(1);
+    setFile(null); setPassword(""); setStep(1);
     setProgress(0); setLogs([]); setResult(null);
+    setShowPassword(false);
   };
 
   const handleDrop = (e) => {
@@ -325,16 +401,17 @@ function DecryptPanel() {
   };
 
   const handleDecrypt = async () => {
-    if (!file || !key.trim()) return;
+    if (!file || !password.trim()) return;
     setStep(2);
     setLogs([]);
     setProgress(0);
 
     const steps = [
       [20, "Reading encrypted file..."],
-      [45, "Validating key..."],
-      [70, "Decrypting Fernet tokens..."],
-      [90, "Rebuilding original file..."],
+      [40, "Extracting salt from file..."],
+      [60, "Regenerating AES key from password (PBKDF2)..."],
+      [85, "Decrypting fields..."],
+      [95, "Rebuilding original file..."],
     ];
 
     for (const [pct, msg] of steps) {
@@ -345,7 +422,7 @@ function DecryptPanel() {
 
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("key", key.trim());
+    fd.append("password", password.trim());
 
     try {
       const res = await fetch(`${API}/decrypt`, { method: "POST", body: fd });
@@ -367,15 +444,15 @@ function DecryptPanel() {
     window.open(`${API}/download/${result.decryptedFile}`, "_blank");
   };
 
-  const ready = file && key.trim().length > 10;
+  const ready = file && password.trim().length >= 8;
 
   return (
     <div>
-      <Steps current={step} steps={["UPLOAD + KEY", "DECRYPT", "DOWNLOAD"]} color="green" />
+      <Steps current={step} steps={["UPLOAD + PASSWORD", "DECRYPT", "DOWNLOAD"]} color="green" />
 
       {step === 1 && (
         <div className="card card-green">
-          <div className="card-label green">01 // Upload Encrypted File + Key</div>
+          <div className="card-label green">01 // Upload Encrypted File + Password</div>
 
           <div
             className={`dropzone dz-green ${dragging ? "dz-over-green" : ""}`}
@@ -400,14 +477,24 @@ function DecryptPanel() {
           )}
 
           <div className="key-input-wrap">
-            <div className="key-input-label">🔑 PASTE SECRET KEY (received via SMS / separate channel)</div>
-            <textarea
-              className="key-input"
-              rows={3}
-              placeholder="Paste key here... e.g. gAAAAABk3mX9..."
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-            />
+            <div className="key-input-label">🔑 ENTER PASSWORD (received from sender via separate channel)</div>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                className="key-input"
+                placeholder="Enter the password shared by sender"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid var(--green)", background: "var(--bg2)", color: "var(--fg)" }}
+              />
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                {showPassword ? "🙈 Hide" : "👁 Show"}
+              </button>
+            </div>
           </div>
 
           <div className="btn-row">
