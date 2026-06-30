@@ -6,81 +6,45 @@ from datetime import datetime, timedelta
 from typing import Optional
 import shutil, uuid, os, re, pandas as pd
 
-from backend.csv_processor import encrypt_csv, encrypt_txt, decrypt_csv, decrypt_txt
+from csv_processor import encrypt_csv, encrypt_txt, decrypt_csv, decrypt_txt
 from utils import count_pii_in_file
+from utils.crypto import derive_key, encrypt_file, decrypt_file
 
-app = FastAPI(title="AKATSUKI — PII Shield", version="2.0.0")
+app = FastAPI(title="AKATSUKI — PII Shield", version="3.0.0")
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── DIRECTORIES ───────────────────────────────────────────────────────────────
-UPLOAD_DIR = "temp/uploads"
-OUTPUT_DIR = "temp/outputs"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "temp", "uploads")
+OUTPUT_DIR = os.path.join(BASE_DIR, "temp", "outputs")
 
-# ── KEY STORE — tracks active keys + expiry ───────────────────────────────────
-# { key_id: { "key": bytes, "expires_at": datetime } }
-key_store: dict = {}
-
-KEY_EXPIRY_MINUTES = 30
-
-
-def save_key(fernet_key: bytes) -> str:
-    """Store key with 30 min expiry. Returns key_id."""
-    key_id = str(uuid.uuid4())[:12]
-    key_store[key_id] = {
-        "key": fernet_key,
-        "expires_at": datetime.now() + timedelta(minutes=KEY_EXPIRY_MINUTES),
-    }
-    return key_id
-
-
-def get_key(raw_key: str) -> Fernet:
-    """
-    Validate and return Fernet object.
-    Accepts either the raw Fernet key directly.
-    Raises HTTPException if invalid or expired.
-    """
-    raw_key = raw_key.strip()
-
-    # Check if it's a key_id we stored
-    if raw_key in key_store:
-        entry = key_store[raw_key]
-        if datetime.now() > entry["expires_at"]:
-            del key_store[raw_key]
-            raise HTTPException(status_code=410, detail="Key has expired. Ask sender to re-encrypt.")
-        return Fernet(entry["key"])
-
-    # Otherwise treat as raw Fernet key
-    try:
-        return Fernet(raw_key.encode())
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid key. Check and try again.")
-
-
-def cleanup_expired_keys():
-    """Remove expired keys from store."""
-    now = datetime.now()
-    expired = [k for k, v in key_store.items() if now > v["expires_at"]]
-    for k in expired:
-        del key_store[k]
-
-
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+except Exception as e:
+    print(f"Warning: Could not create temp dirs: {e}")
 # ═════════════════════════════════════════════════════════════════════════════
 # ROUTES
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.get("/")
 async def root():
-    return {"message": "AKATSUKI PII Shield is running", "version": "2.0.0"}
+    return {"message": "AKATSUKI PII Shield is running", "version": "3.0.0"}
 
 
 # ── ANALYZE ───────────────────────────────────────────────────────────────────
@@ -121,15 +85,22 @@ async def analyze(file: UploadFile = File(...)):
 
 # ── ENCRYPT ───────────────────────────────────────────────────────────────────
 @app.post("/encrypt")
-async def encrypt(file: UploadFile = File(...)):
+async def encrypt(
+    file:     UploadFile = File(...),
+    password: str        = Form(...),   # ← sender enters password
+):
     """
-    Encrypt all PII in uploaded file.
-    Returns encrypted file name + secret key (valid 30 min).
+    Encrypt all PII in uploaded file using password-based AES encryption.
+    Password is passed through PBKDF2 to derive AES key internally.
+    Raw key is never shown or stored.
     """
     if not file.filename.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Only CSV and TXT files are supported")
 
-    file_id   = str(uuid.uuid4())
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    file_id     = str(uuid.uuid4())
     input_path  = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
     output_name = f"encrypted_{file_id}_{file.filename}"
     output_path = f"{OUTPUT_DIR}/{output_name}"
@@ -138,25 +109,27 @@ async def encrypt(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buf)
 
     try:
-        # Generate fresh Fernet key
-        fernet_key = Fernet.generate_key()
+        # Derive AES key from password using PBKDF2 + random salt
+        salt       = os.urandom(16)
+        fernet_key = derive_key(password, salt)
         fernet     = Fernet(fernet_key)
 
-        # Encrypt
+        # Encrypt PII fields in file
         if file.filename.endswith(".csv"):
             fields_encrypted = encrypt_csv(input_path, output_path, fernet)
         else:
             fields_encrypted = encrypt_txt(input_path, output_path, fernet)
 
-        # Store key with expiry
-        key_id = save_key(fernet_key)
-        cleanup_expired_keys()
+        # Prepend salt to encrypted output file so receiver can regenerate key
+        with open(output_path, "rb") as f:
+            encrypted_content = f.read()
+        with open(output_path, "wb") as f:
+            f.write(salt + encrypted_content)   # salt (16 bytes) + encrypted data
 
         return {
             "success":         True,
             "encryptedFile":   output_name,
-            "key":             fernet_key.decode(),   # show to sender once
-            "keyExpiresIn":    f"{KEY_EXPIRY_MINUTES} minutes",
+            "message":         "Share your password with receiver via a separate channel",
             "fieldsEncrypted": fields_encrypted,
             "fileName":        file.filename,
         }
@@ -174,19 +147,16 @@ async def encrypt(file: UploadFile = File(...)):
 # ── DECRYPT ───────────────────────────────────────────────────────────────────
 @app.post("/decrypt")
 async def decrypt(
-    file: UploadFile = File(...),
-    key:  str        = Form(...),
+    file:     UploadFile = File(...),
+    password: str        = Form(...),   # ← receiver enters same password
 ):
     """
-    Receiver uploads encrypted file + pastes secret key.
-    Returns original decrypted file.
-    Key must not be expired (30 min window).
+    Receiver uploads encrypted file + enters same password.
+    System extracts salt from file, regenerates same AES key, decrypts.
+    Raw key is never stored or shared.
     """
     if not file.filename.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Only CSV and TXT files are supported")
-
-    # Validate key (raises if expired or invalid)
-    fernet = get_key(key)
 
     file_id     = str(uuid.uuid4())
     input_path  = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
@@ -197,10 +167,54 @@ async def decrypt(
         shutil.copyfileobj(file.file, buf)
 
     try:
+        # Extract salt from first 16 bytes, rest is encrypted content
+        with open(input_path, "rb") as f:
+            raw = f.read()
+
+        if len(raw) < 16:
+            raise HTTPException(status_code=400, detail="File too small to be a valid encrypted file")
+
+        salt              = raw[:16]
+        encrypted_content = raw[16:]
+
+        # Write back only the encrypted content (without salt) for decryption
+        with open(input_path, "wb") as f:
+            f.write(encrypted_content)
+
+        # Regenerate same AES key using same password + extracted salt
+        fernet_key = derive_key(password, salt)
+        fernet     = Fernet(fernet_key)
+
+        # ── EXPLICIT VERIFICATION STEP ──────────────────────────────────────
+        # Before touching the whole file, find the FIRST Fernet token in the
+        # raw content and try to decrypt JUST that one token directly here.
+        # If the password is wrong, Fernet.decrypt raises InvalidToken
+        # immediately, and we never proceed to process/write any output file.
+        with open(input_path, "rb") as f:
+            content_preview = f.read().decode("utf-8", errors="ignore")
+
+        token_match = re.search(r"gAAAAA[A-Za-z0-9\-_=]+", content_preview)
+        if not token_match:
+            raise HTTPException(
+                status_code=400,
+                detail="No encrypted PII fields found in this file — it may not be a valid PII_Guard encrypted file"
+            )
+
+        # This line raises InvalidToken on wrong password — caught below
+        fernet.decrypt(token_match.group().encode())
+        # ──────────────────────────────────────────────────────────────────
+
+        # Password verified correct — now safe to decrypt the whole file
         if file.filename.endswith(".csv"):
             fields_decrypted = decrypt_csv(input_path, output_path, fernet)
         else:
             fields_decrypted = decrypt_txt(input_path, output_path, fernet)
+
+        # Extra safety net: if somehow zero fields got decrypted, treat as failure
+        if fields_decrypted == 0:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise HTTPException(status_code=400, detail="Wrong password or corrupted file")
 
         return {
             "success":         True,
@@ -208,6 +222,12 @@ async def decrypt(
             "fieldsDecrypted": fields_decrypted,
             "fileName":        file.filename,
         }
+
+    except InvalidToken:
+        raise HTTPException(status_code=400, detail="Wrong password or corrupted file")
+
+    except HTTPException:
+        raise
 
     except Exception as e:
         if os.path.exists(output_path):
